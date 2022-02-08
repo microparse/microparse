@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <limits.h>
 
 #define INF -1
 #define NINF -2
@@ -39,18 +40,20 @@ int cur_bit_pos = 0;
 int save_head_byte_pos;
 int save_head_bit_pos;
 
-const char* TAPE = "\xF2\xFF\xFF"; 
-const int TAPE_LEN = 3;
+char* TAPE;// = "\xF2\xFF\xFF"; 
+int TAPE_LEN;// = 3;
 
 
 /*@requires TAPE_LEN >= 0;
   requires \valid_read(((char*)TAPE)+(0..TAPE_LEN));
+  @requires TAPE_LEN < INT_MAX - 1;
   requires cur_byte_pos < TAPE_LEN;
   requires cur_byte_pos >= 0;
   requires cur_bit_pos >= 0;
-  requires cur_bit_pos <= 31;
+  requires cur_bit_pos < 8;
   
   assigns cur_byte_pos, cur_bit_pos;
+  assigns \result \from TAPE[0..TAPE_LEN];
   
   ensures cur_bit_pos >= 0 && cur_bit_pos <= 8;
   ensures cur_byte_pos >= 0 && cur_byte_pos <= TAPE_LEN;
@@ -60,13 +63,13 @@ bool get_next_bit() {
 
     // assert(cur_byte_pos < TAPE_LEN);
     char cur_char = TAPE[cur_byte_pos];
-    //@assert cur_bit_pos < 32;
     cur_symbol = 1 & (cur_char >> cur_bit_pos);
     // printf("Read %d from tape at loc %d\n", cur_symbol, cur_byte_pos*8+cur_bit_pos);
-    //@assert cur_byte_pos + 1 < 2147483647;
+    //@assert cur_bit_pos + 1 < INT_MAX;
     cur_bit_pos++;
     if (cur_bit_pos >= 8) {
         cur_bit_pos = cur_bit_pos % 8;
+        //@assert cur_byte_pos + 1 < INT_MAX;
         cur_byte_pos++;
     }
 
@@ -75,11 +78,12 @@ bool get_next_bit() {
 
 
 /*@requires TAPE_LEN >= 0;
-  requires \valid_read(TAPE+(0..(TAPE_LEN-1)));
+  @requires TAPE_LEN < INT_MAX - 1;
+  requires \valid_read((char*)TAPE+(0..TAPE_LEN));
   requires cur_byte_pos <= TAPE_LEN;
   requires cur_byte_pos >= 0;
   requires cur_bit_pos >= 0;
-  requires cur_bit_pos <= 8;
+  requires cur_bit_pos < 8;
   assigns \nothing;
   ensures (\result == 0) || (\result == 1);
 */
@@ -99,9 +103,11 @@ bool is_tape_available() {
 }
 
 /*@requires \valid(r);
+  requires \separated(r, &cur_byte_pos, &cur_bit_pos);
   requires cur_bit_pos >= 0 && cur_bit_pos <= 8;
   requires cur_byte_pos >= 0 && cur_byte_pos <= TAPE_LEN;
   assigns *r;
+  ensures r->end_byte >= 0 && r->end_bit >= 0;
 */
 void set_pos_end(parsed_result* r)
 {
@@ -115,6 +121,7 @@ void set_pos_end(parsed_result* r)
   requires cur_bit_pos >= 0 && cur_bit_pos <= 8;
   requires cur_byte_pos >= 0 && cur_byte_pos <= TAPE_LEN;
   assigns *r;
+  ensures r->start_byte >= 0 && r->start_bit >= 0;
 */
 void set_pos_start(parsed_result* r)
 {
@@ -125,6 +132,7 @@ void set_pos_start(parsed_result* r)
 
 
 /*@requires TAPE_LEN >= 0;
+  @requires TAPE_LEN < INT_MAX - 1;
   requires \valid_read(((char*)TAPE)+(0..TAPE_LEN));
   requires cur_byte_pos < TAPE_LEN;
   requires cur_byte_pos >= 0;
@@ -132,6 +140,7 @@ void set_pos_start(parsed_result* r)
   requires cur_bit_pos < 8;
   
   assigns cur_byte_pos;
+  assigns \result \from TAPE[0 .. TAPE_LEN];
   
   ensures cur_bit_pos >= 0 && cur_bit_pos <= 8;
   ensures cur_byte_pos >= 0 && cur_byte_pos <= TAPE_LEN;
@@ -145,12 +154,13 @@ unsigned char get_next_byte() {
 }
 
 /*@requires TAPE_LEN >= 0;
+  @requires TAPE_LEN < INT_MAX - 1;
   requires cur_byte_pos <= TAPE_LEN;
   requires cur_byte_pos >= 0;
   requires cur_bit_pos >= 0;
   requires cur_bit_pos <= 8;
   assigns \nothing;
-  ensures \result >= 0;
+  ensures \result >= 0 && \result < 8 * TAPE_LEN;
 */
 int remaining_bits() {
     int remaining_bytes = TAPE_LEN - cur_byte_pos;
@@ -165,66 +175,71 @@ int remaining_bits() {
 }
 
 /*@requires TAPE_LEN >= 0;
+  @requires TAPE_LEN < INT_MAX - 1;
   requires cur_byte_pos <= TAPE_LEN;
   requires cur_byte_pos >= 0;
   requires cur_bit_pos >= 0;
   requires cur_bit_pos <= 8;
   assigns \nothing;
   ensures \result >= 0;
+  @ensures \result <= TAPE_LEN;
+  
 */
 int remaining_bytes() {
     int remaining_bytes = TAPE_LEN - cur_byte_pos;
+    if (remaining_bytes < 0) {debug_write("remaining bytes: bytes < 0;");}
     return remaining_bytes;
 }
 
 // set the value of the register to T
 /*@requires size > 0;
+  @requires TAPE_LEN < INT_MAX - 1;
+  requires size < TAPE_LEN;
   requires cur_byte_pos <= TAPE_LEN;
   requires cur_byte_pos >= 0;
   requires cur_bit_pos >= 0;
   requires cur_bit_pos <= 8;
   requires ((unit == BIT) ==> size <= 32) && ((unit == BYTE) ==> size <= 4);
-  assigns \nothing;
+  assigns \nothing ;
 */
 int tag_cons(dataunit unit, int size) {
     unsigned int tag_val;
-
     if (unit == BIT) {
-        /*@ loop invariant 0 <= i < size;
-          loop assigns tag_val;
-          loop variant size;*/
-        for (int i = 0; i < size; ++i) {
+        /*@loop invariant 0 < i <= size;
+          @loop assigns i, tag_val;
+          @loop variant size - i;*/
+        for (int i = size; i > 0; i--) {
             tag_val = tag_val | get_next_bit();
             tag_val = tag_val << 1;
         }
-        //@ assert tag_val >= 0;
     } else {
-        assert(size <= 4);
-        /*@ loop invariant 0 <= i < size;
-          loop assigns tag_val;
-          loop variant size;*/
+        /*@loop invariant 0 <= i;
+          loop assigns tag_val, i;
+          loop variant size - i; */
         for (int i = 0; i < size; ++i) {
             tag_val = get_next_byte();
             tag_val = tag_val << 8;
         }
-        //@ assert tag_val >= 0;
     }
     return tag_val;
 };
 
 // set the value of the counter register to L.
 /*@requires TAPE_LEN >= 0;
+  @requires TAPE_LEN < INT_MAX - 1;
   requires \valid_read(TAPE+(0..(TAPE_LEN-1)));
   requires cur_byte_pos <= TAPE_LEN;
   requires cur_byte_pos >= 0;
   requires cur_bit_pos >= 0;
   requires cur_bit_pos <= 8;
   requires size > 0;
+  requires size < TAPE_LEN;
   requires ((unit == BIT) ==> size <= 32) && ((unit == BYTE) ==> size <= 4);
+  ensures \result < (TAPE_LEN - cur_byte_pos);
   assigns \nothing;
 */
-int len_cons(dataunit unit, endianness e, int size) {
-    int len_val = 0;
+unsigned int len_cons(dataunit unit, endianness e, int size) {
+    unsigned int len_val = 0;
     if (unit == BIT) {
         int i = 0;
         /*@loop invariant 0 <= i < size;
@@ -234,11 +249,10 @@ int len_cons(dataunit unit, endianness e, int size) {
             len_val = len_val | get_next_bit();
             len_val = len_val << 1;
         }
-        //@ assert len_val >= 0;
     } else {
         int i = 0;
         // assert(size <= 4);
-        //@ requires size <= 4;
+        //@ assert size <= 4;
         //@ assert unit == BYTE;
         /*@loop invariant 0 <= i < size;
           loop assigns len_val;
@@ -247,19 +261,18 @@ int len_cons(dataunit unit, endianness e, int size) {
             len_val = get_next_byte();
             len_val = len_val << 8;
         }
-        //@ assert len_val >= 0;
     }
 
-    // if (unit == BIT) {
-    //     if (remaining_bits() < len_val) {
-    //         // error
-    //         debug_write("len: err\n");
-    //     }
-    // } else {
-    //     if (remaining_bytes() < len_val) {
-    //         debug_write("len:err\n");
-    //     }
-    // }
+    if (unit == BIT) {
+        if (remaining_bits() < len_val) {
+            // error
+            debug_write("len: err\n");
+        }
+    } else {
+        if (remaining_bytes() < len_val) {
+            debug_write("len:err\n");
+        }
+    }
     // return read value
     return len_val;
 };
@@ -269,12 +282,14 @@ int len_cons(dataunit unit, endianness e, int size) {
 // repeats construct r, n times
 
 /*@requires TAPE_LEN >= 0;
+  @requires TAPE_LEN < INT_MAX - 1;
   requires \valid_read(TAPE+(0..(TAPE_LEN-1)));
   requires cur_byte_pos <= TAPE_LEN;
   requires cur_byte_pos >= 0;
   requires cur_bit_pos >= 0;
   requires cur_bit_pos <= 8;
-  requires n > 0 || min > 0 || max > 0;
+  requires (n < 0) ==> (min > 0 || max > 0);
+  ensures (n < 0) || (n < (TAPE_LEN - cur_byte_pos));
   assigns \nothing;
 */
 parsed_result repeat_cons(dataunit u, int n, int min, int max) {
@@ -284,15 +299,17 @@ parsed_result repeat_cons(dataunit u, int n, int min, int max) {
         // at least min items and at most max items
         if (u == BIT) {
             int i = 0;
+            if (min < 0) {}
             /*@ loop invariant  0 <= i <= min;
                loop assigns \nothing;
-               loop variant min;*/
+               loop variant min - i;
+            */
             for (i = 0; i < min; ++i) {
                 get_next_bit();
             }
             /*@ loop invariant  0 <= i <= max;
                loop assigns \nothing;
-               loop variant max;*/
+               loop variant max - i;*/
             while (i <= max) {
                 if (is_tape_available()) {
                     break;
@@ -300,7 +317,6 @@ parsed_result repeat_cons(dataunit u, int n, int min, int max) {
                 get_next_bit();
                 i++;
             }
-
             set_pos_end(&r);
             return r;
         } else {
@@ -308,19 +324,20 @@ parsed_result repeat_cons(dataunit u, int n, int min, int max) {
 
             /*@ loop invariant  0 <= i <= min;
                loop assigns \nothing;
-               loop variant min;*/
+               loop variant min - i;*/
             for (i = 0; i < min; ++i) {
                 get_next_byte();
             }
 
             /*@ loop invariant  0 <= i <= max;
                loop assigns \nothing;
-               loop variant max;*/
+               loop variant max - i;*/
             while (i <= max) {
                 if (is_tape_available()) {
                     break;
                 }
                 get_next_byte();
+                i++;
             }
 
             set_pos_end(&r);
@@ -331,7 +348,7 @@ parsed_result repeat_cons(dataunit u, int n, int min, int max) {
             assert(n <= 8);
             /*@loop invariant  0 <= i < n;
               loop assigns \nothing;
-              loop variant n;*/
+              loop variant n - i;*/
             for (int i = 0; i < n; ++i) {
                 get_next_bit();
             }
@@ -340,7 +357,7 @@ parsed_result repeat_cons(dataunit u, int n, int min, int max) {
         } else {
             /*@loop invariant  0 <= i < n;
                loop assigns \nothing;
-               loop variant n;*/
+               loop variant n - i;*/
             for (int i = 0; i < n; ++i) {
                 get_next_byte();
             }
@@ -354,7 +371,7 @@ parsed_result repeat_cons(dataunit u, int n, int min, int max) {
 // We define a gloabl list of registers which store results.
 /*@ assigns \nothing;
 */
-unsigned int run_parser(char* input_buffer, int buffer_len) {
+unsigned int run_parser() {
     // PDU
     int reg4144 = tag_cons(BIT, 4);
     // RFU
@@ -478,10 +495,13 @@ unsigned int run_parser(char* input_buffer, int buffer_len) {
     return 0;
 };
 
-/*@assigns \nothing; */
+/*@assigns \nothing;
+ */
 int main(int argc, char *argv[])
 {
-    unsigned int x = run_parser(TAPE, TAPE_LEN);
+    TAPE_LEN = argc;
+    TAPE= argv[0];
+    unsigned int x = run_parser();
     if (x == 0) {
         return 0;
         // printf("accepted input.");
@@ -489,5 +509,4 @@ int main(int argc, char *argv[])
         // printf("rejected input");
         return 1;
     }
-    return 0;
 }
